@@ -11,17 +11,12 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4  # Las revisiones internas de v4 ya apuntan a entornos actualizados
 
       - name: Set up Java 17
-        # CORRECCIÓN PRINCIPAL: forzar Java 17 globalmente desde el inicio.
-        # El log muestra que JAVA_HOME apuntaba a temurin-11, pero el sdkmanager
-        # moderno fue compilado con Java 17 (class file version 61.0) y falla
-        # con "UnsupportedClassVersionError" bajo Java 11 (max version 55.0).
-        # El runner ya tiene Java 17 en JAVA_HOME_17_X64; solo hay que activarlo.
         uses: actions/setup-java@v4
         with:
-          distribution: temurin
+          distribution: 'temurin'
           java-version: '17'
 
       - name: Set up Python
@@ -61,9 +56,6 @@ jobs:
             buildozer-${{ runner.os }}-
 
       - name: Bootstrap Android SDK in Buildozer's path
-        # Buildozer usa su propio SDK en ~/.buildozer/android/platform/android-sdk
-        # e ignora el SDK del sistema. Hay que instalar cmdline-tools ahí
-        # y usar Java 17 (ya activo por el paso anterior) para que sdkmanager funcione.
         run: |
           BUILDOZER_SDK="${HOME}/.buildozer/android/platform/android-sdk"
           mkdir -p "${BUILDOZER_SDK}"
@@ -72,41 +64,22 @@ jobs:
           wget -q "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip" \
             -O /tmp/cmdline-tools.zip
 
-          # 2. Instalar en la ruta legacy que buildozer espera: tools/bin/sdkmanager
+          # 2. Instalar en la ruta estructural correcta
           mkdir -p /tmp/ct-extract
           unzip -q /tmp/cmdline-tools.zip -d /tmp/ct-extract
-          mkdir -p "${BUILDOZER_SDK}/tools"
-          cp -r /tmp/ct-extract/cmdline-tools/* "${BUILDOZER_SDK}/tools/"
+          mkdir -p "${BUILDOZER_SDK}/cmdline-tools/latest"
+          cp -r /tmp/ct-extract/cmdline-tools/* "${BUILDOZER_SDK}/cmdline-tools/latest/"
 
-          SDKMANAGER="${BUILDOZER_SDK}/tools/bin/sdkmanager"
-          echo "Java version activa:"
-          java -version
+          SDKMANAGER="${BUILDOZER_SDK}/cmdline-tools/latest/bin/sdkmanager"
 
-          # 3. Escribir licencias directamente en disco (primera capa de cobertura)
-          LICENSES_DIR="${BUILDOZER_SDK}/licenses"
-          mkdir -p "${LICENSES_DIR}"
-          printf '\n8933bad161af4178b1185d1a37fbf41ea5269c55\n24333f8a63b6825ea9c5514f83c2829b004d1fee\n' \
-            > "${LICENSES_DIR}/android-sdk-license"
-          printf '\n84831b9409646a918e30573bab4c9c91346d8abd\n' \
-            > "${LICENSES_DIR}/android-sdk-preview-license"
-          printf '\nd975f751698a77b662f1254ddbeed3901e976f5a\n' \
-            > "${LICENSES_DIR}/intel-android-extra-license"
+          # 3. Aceptar licencias vía sdkmanager nativo
+          yes | "${SDKMANAGER}" --sdk_root="${BUILDOZER_SDK}" --licenses || true
 
-          # 4. Aceptar licencias via sdkmanager (segunda capa — ahora funciona con Java 17)
-          yes | "${SDKMANAGER}" --sdk_root="${BUILDOZER_SDK}" --licenses 2>/dev/null || true
-
-          # 5. Preinstalar los paquetes que buildozer necesita
+          # 4. Preinstalar paquetes necesarios
           yes | "${SDKMANAGER}" --sdk_root="${BUILDOZER_SDK}" \
             "platform-tools" \
             "platforms;android-33" \
-            "build-tools;33.0.2" \
-            "build-tools;34.0.0" 2>/dev/null || true
-
-          # 6. Aceptar licencias una vez más tras instalar los paquetes
-          yes | "${SDKMANAGER}" --sdk_root="${BUILDOZER_SDK}" --licenses 2>/dev/null || true
-
-          echo "--- SDK bootstrap completo ---"
-          ls "${BUILDOZER_SDK}/"
+            "build-tools;33.0.2" || true
 
       - name: Clean previous local build artifacts
         run: |
@@ -115,7 +88,8 @@ jobs:
 
       - name: Build APK
         run: |
-          buildozer android debug
+          # El "yes |" asegura que si Buildozer pide confirmar algo en consola, no se quede congelado
+          yes | buildozer android debug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -128,5 +102,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: build-logs
-          path: .buildozer/android/platform/build-*/build/other_builds/
+          path: |
+            ~/.buildozer/buildozer.log
+            .buildozer/android/platform/build-*/build/other_builds/
           if-no-files-found: ignore
